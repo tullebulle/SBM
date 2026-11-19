@@ -1,0 +1,14 @@
+# RT-1 clips for the world model (sbm_rae.bridge_data, the Bridge loader on DriftWorld's RT-1 conversion: 10-D actions,
+# camera frames stored at 256x320 and resized to 256x256 by the loader when BRIDGE_FRAME_SIZE=256 is set in the
+# environment, as for the released RT-1 model). Data: $SBM_STORE/data/rt1/processed/rt_1 (sbm_rae.paths).
+name: bridge          # the loader / trainer / loss dispatch on this name (BridgeDataModule, bridge_cbm)
+processed_dir: ${sbm_store:data/rt1/processed/rt_1}
+img_resolution: 256
+num_classes: 1
+n_frames: 5
+n_history: 4
+action_dim: 10
+use_precomputed_latents: false
+val_episodes: 256
+encode_chunk: 64
+latent_cache_dir: null

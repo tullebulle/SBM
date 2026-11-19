@@ -1,0 +1,67 @@
+[project]
+name = "sbm"
+version = "0.1.0"
+description = "Scalable Beckmann maps (SBM): one-step generators with self-guided training - ImageNet (SD-VAE and RAE latents) and one-step world models (Bridge-V2, RT-1)"
+requires-python = ">=3.11, <=3.13"
+dependencies = [
+	"hydra-core==1.3.2",
+	"lightning==2.6.0.dev20251019",
+	"matplotlib==3.10.7",
+	"numpy==2.3.5",
+	"omegaconf==2.3.0",
+	"pandas",
+	"pyarrow",
+	"pillow==12.0.0",
+	"scipy",
+	"timm==1.0.22",
+	"torch-fidelity==0.3.0",
+	"torchdiffeq==0.2.5",
+	"torchmetrics==1.9.0",
+	"tqdm==4.67.1",
+	"wandb==0.23.0",
+	"diffusers @ git+https://github.com/huggingface/diffusers@af28ae2d5ba0ef80d99fff7859ebea730e1cf3f8",
+	"torch==2.9.1",
+	"torchvision",
+	"transformers==4.50.1",
+	"hf-transfer>=0.1.9",
+	"accelerate>=1.13.0",
+	"pytest>=9.0.3",
+	"packaging>=26.2",
+	"ninja>=1.13.0",
+	"setuptools>=81.0.0",
+	"wheel>=0.47.0",
+	"flash-attn-3",
+]
+
+[project.optional-dependencies]
+# the world models' evaluator (scripts/rae/eval_bridge.py: video decoding, SSIM / PSNR / LPIPS / FID) and the FVD step
+# (stylegan-v's metric script, fetched by scripts/rae/wm/fetch_fvd.sh); `uv sync --frozen --extra wm`
+wm = [
+	"decord2==3.4.0",
+	"imageio==2.38.1",
+	"imageio-ffmpeg==0.6.0",
+	"lpips==0.1.4",
+	"pytorch-fid==0.3.0",
+	"scikit-image==0.26.0",
+	"click",
+]
+
+[project.scripts]
+sbm = "sbm.cli:main"
+sbm-t2i = "sbm_t2i.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Prebuilt Hopper wheel matching torch 2.9 + cu128. sbm_rae's attention (src/sbm_rae/models/flash_attn/) adds the
+# forward-mode (torch.func.jvp) kernels on top of this build; needs an H100/H200, elsewhere run with model.attn_func=default.
+[tool.uv.sources]
+flash-attn-3 = { url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.8.2/flash_attn_3-3.0.0+cu128torch2.9gite2743ab-cp39-abi3-linux_x86_64.whl" }
+
+[tool.pytest.ini_options]
+addopts = "-m 'not real'"
+markers = ["real: needs real weights or assets in the store and a lot of host memory (deselected by default)"]

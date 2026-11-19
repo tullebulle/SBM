@@ -1,0 +1,12 @@
+# DiT-XL/1 (28 blocks at width 1152, patch 1; sbm_rae.models.dit.DiT_XL_1): the plain DiT without the DDT head
+# (dit_xl_1_dh). Defaults for the RAE DINOv2-S latent (16x16x384); override input_size / in_channels for other latents.
+name: DiT-XL/1
+input_size: 16
+in_channels: 384
+mlp_ratio: 4.0
+label_dim: ${dataset.num_classes}
+learn_sigma: false
+qk_norm: false
+attn_func: fa3
+is_zero_data: true
+dropout: 0.0

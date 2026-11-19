@@ -1,0 +1,104 @@
+# Defaults of the SD-VAE-latent trainer (the plain BTM objective on DiT-B/2). An experiment (configs/sbm/exp/<name>.yaml)
+# changes only what differs: `python -m sbm.cli train <exp> key=value ...`. The SBM recipes are exp/b2_sbm.yaml (from
+# scratch), exp/xl_sbm.yaml (the XL recipe) and exp/xl_finetune.yaml (fine-tuning the released XL map); exp/b2_btm.yaml is
+# the unguided BTM objective. Paths: `${store:}` is the store ($SBM_STORE, else <repo>/store).
+name: ???                  # the run folder is <store>/runs/<YYYYMMDD-HHMMSS>_<name>; defaults to the experiment's name
+exp_name: null
+seed: 42
+
+init:
+  from: null               # a checkpoint, an export (sbm.infer) or a run folder (its latest checkpoint)
+  weights: ema             # which weights of a training checkpoint: ema (the active EMA copy) | raw | ema_0_9999 ...
+  resume_state: false      # true: continue its optimizer, scheduler, EMA copies, loss state and global step (a continuation
+                           # of another run); false: weights only (fine-tuning: a new run from step 0)
+
+model:
+  name: DiT-B/2
+  input_size: 32
+  in_channels: 4
+  label_dim: 1000
+  mlp_ratio: 4.0
+  train_pos_embed: false   # the sin-cos position embedding is fixed
+  tangent_only_jvp: false  # under the JVP the token-path Linears + patch conv skip the GEMM on a zero weight tangent (bit-identical; the XL exps)
+  gw_embedder: false       # a guidance-strength input w (zero-init embedder added to the conditioning); off in the paper's maps
+  gw_default: 1.0          # the w a caller that passes none gets (evaluator without gw=..., the monitor)
+  gw_input: raw            # raw: the embedder sees w | kappa: 1 - 1/w (iMF's Omega-conditioning, w = 1 unguided)
+  gw_interval: false       # two more zero-init embedders for the guidance interval [s_lo, s_hi] (iMF; needs gw_embedder)
+
+data:
+  latent_pack_dir: ${store:}/data/imagenet_latents_packed_adm   # train/: ADM-preprocessed ImageNet-256 SD-VAE moments (scripts/sbm/encode_imagenet.py)
+  latent_dir: null         # optional per-file fallback (<root>/<split>/<class>/<image>.pt with moments / moments_flip)
+  latents_scale: 0.18215
+  num_workers: 3           # loader workers per GPU (a B/2 rank uses about 1.3 cores with 3 workers)
+
+loss:
+  transport: {p: 1.0, c: 0.01, weight: 1.0}   # per-example weight sg[(d^2 + c)^-p]; p = 0 is plain L2; weight scales the term's gradient only
+  endpoint: {p: 0.0, c: 0.01, weight: 1.0, omega_skew: 1.0, late_weight: null}   # weight: endpoint gradient only; omega_skew > 1: omega' nearer 1
+                                        # late_weight {t0, power, cap}: rows at omega' > t0 weighted min{((1 - t0)/(1 - omega'))^power, cap} (loss.py)
+  anchor_alpha: 0.4                     # omega ~ U[1 - alpha, 1], omega' ~ U[omega, 1]  (the SBM recipes: 0.65, anchors down to t_lo 0.35)
+  restrict_transport: false             # transport time t -> t * omega
+  time: {p_mean: -1.2, p_std: 1.0, eps: 1.0e-4, p_mean_end: null, anneal_start: 0, anneal_steps: 0,   # logit-normal
+         mix_frac: 0.0, mix_lo: 0.3,   # this fraction of the transport times uniform on [mix_lo, omega) (the SBM recipes: 0.5)
+         importance: {enabled: false, eps: 0.1}}   # eps of the rows redrawn U(0, 1), transport rows weighted 1 / p_eps(t | omega) (loss.py)
+  balance: {mode: match_smaller_to_larger, parameter_path: final_layer, ema: 0.99, reset_on_resume: false, refresh_every: 1}
+                                        # mode: match_smaller_to_larger (per step) | ema (smoothed norms; the B/2 SBM recipe) | none
+                                        # refresh_every > 1: opt-in cached EMA weights, measured in microbatches; 1 preserves the native rule
+  guide: {enabled: false, w: 1.0, kappa: 0.0, t_lo: 0.35, t_hi: 0.6, negative: uncond, start_step: 0, endpoint: false, diag_frac: 0.0,
+          omega_cond: false, w_min: 1.0, w_max: 8.0, beta: 1.0, t_cap: 1.0, teacher_decay: null, teacher_refresh: null, v_weight: 1.0,
+          autoguide: {enabled: false, ckpt: null, weight: 0.0, which: ema}}
+                                        # the self-guidance (loss.py): iMF-style guided tangent V + kappa (b_y - b_neg) on t in [t_lo, t_hi],
+                                        # guided endpoint target, diagonal rows; teacher_decay 1.0 + teacher_refresh 10000 = the frozen copy
+                                        # the recipes read from; autoguide: + weight (b(y) - b_weak(y)) from the frozen copy `which` of
+                                        # `ckpt`, an earlier checkpoint; kappa + weight < 1
+  label_dropout: 0.0                    # labels dropped to the null class (the recipes: 0.1; the guide needs the null class trained)
+
+optim:
+  name: muon               # muon (Muon on 2-D weights, AdamW on the rest at adam_lr) | adamw
+  lr: 1.0e-3
+  adam_lr: null            # null = lr / 10
+  betas: [0.9, 0.95]
+  weight_decay: 0.0
+  warmup_steps: 0
+  schedule: constant       # constant | cosine | staged
+  stage_step: 0
+  stage_factor: 1.0
+  decay_start_step: 0
+  decay_end_step: 0
+  min_factor: 0.0
+  clip: null               # global gradient-norm clip
+  force_on_resume: true    # reassert lr after resuming another run's optimizer state
+
+train:
+  max_steps: 200000        # absolute global step (resume_state continues the parent's counter)
+  steps_after_init: null   # or: max_steps = the parent's step + this
+  global_batch: 256
+  per_device_batch: 64
+  devices: auto            # GPUs on this node (under torchrun: its --nproc_per_node)
+  precision: bf16-mixed
+  tf32: true
+  per_rank_seed: true      # every rank its own noise stream
+  checkpoint_every: 2500
+  stage_checkpoints_locally: null   # a node-local directory: checkpoints are written there first and copied to the run folder
+                                    # in the background (for slow shared filesystems)
+  log_every: 25
+  val_every: 0             # N > 0: a validation pass every N steps (needs a val/ split in the latent pack)
+  val_batches: 8
+  ema: {decays: [0.99, 0.999, 0.9999], active: 0.999, min_step: 100, foreach: false}   # foreach: bit-identical, no host syncs
+  eval: {protocol: null, steps: []}      # in-training evaluation on rank 0: e.g. xl_val50k at [1000, 2000, ...]
+  sync_free: false         # logged scalars made on the device; the logged grad norm by foreach
+  step_timer: 0            # every N steps: seconds per step to monitor/perf.jsonl and perf/* (0 = off)
+  monitor:                 # fixed-noise one-step Inception FID of EMA copies inside training (sbm.monitor; every 0 = off)
+    every: 0
+    n_per_rank: 2000       # pooled over GPUs (FID-8k on 4 GPUs); rank 0 alone = the b2_adm50k stream's first n
+    decays: [0.999]
+    omega: 0.8
+    seed: 2066             # 42 + 2024, the b2_adm50k stream; rank r uses seed + 7919 r
+    batch: 250
+    vae_batch: 64
+    refs: [adm]            # FID vs the ADM ImageNet-train statistics; each ref adds one 2048-d eig per read
+    label_scales: [1.0]    # each read repeated with the class rows moved away from the null row by this factor
+    guidance_reads: []     # a map with a guidance input: extra reads at [w, s_lo, s_hi] (tag suffix _w<w>)
+    steps_per_epoch: null  # -> monitor/epoch (ImageNet at batch 256: 5004.56)
+    schedule: null         # {metric: ema0_999_fid50k_est_val, points: [[step, value], ...]} -> monitor/schedule, gap_to_schedule
+
+wandb: {project: sbm, entity: null, mode: offline, tags: []}   # mode online to sync (wandb login)

@@ -1,0 +1,71 @@
+# @package _global_
+# The Bridge-V2 world model (sbm_rae.bridge_*): DriftWorld's U-Net as a one-step map on the SD3-VAE latent (32x32x16),
+# conditioned on four history frames and the actions, trained with bridge_cbm at omega = 1 (no guidance). Released model:
+# global batch 128, AdamW lr 2e-4 constant to 600k steps, then a 60k-step cosine cool-down to 5 % of the rate resumed
+# from the 600k checkpoint (resume_from_checkpoint=<600k ckpt> lr.schedule=cosine lr.decay_start_step=600000
+# lr.decay_end_step=660000 lr.min_factor=0.05 lr.force_on_resume=true trainer.num_train_steps=660000).
+# Read: EMA 0.999, omega 0.8, every validation episode in 8-frame chunks (scripts/rae/eval_bridge.py) ->
+# SSIM 0.869 / PSNR 24.80 / LPIPS 0.060 / FID 4.25 / FVD 18.1 at step 660,000.
+# Data: DriftWorld's conversion of BridgeData V2 and the cached SD3 latents (scripts/rae/wm/data).
+defaults:
+  - override /dataset: bridge
+  - override /model: bridge_unet
+
+dataset:
+  use_precomputed_latents: false
+  action_dim: 7
+  latent_cache_dir: ${sbm_store:data/bridge/latents_sd3}   # training reads the cached latents, never the codec
+
+model:
+  in_channels: 16
+  num_actions: 7
+
+vae:
+  enabled: true
+  kind: sdvae                 # a diffusers AutoencoderKL (train.yaml's default is the RAE line's kind: rae)
+  pretrained_model_name_or_path: stabilityai/stable-diffusion-3-medium-diffusers
+  subfolder: vae
+  latents_scale: 1.5305
+  latents_bias: 0.0
+  local_files_only: true
+
+loss:
+  name: bridge_cbm
+  guided_cbm:
+    time_shift: 1.0
+    label_dropout: 0.1          # condition dropout: the null action branch (unused at inference)
+    transport:
+      weight: 30
+    balance:
+      mode: none
+    guide:
+      enabled: false
+      start_step: 30000
+      kappa: 0.8
+
+signed:
+  enabled: false
+  alpha: 0.0
+
+optimizer: adamw
+weight_decay: 0.01
+lr:
+  val: 2.0e-4
+  warmup_steps: 1000
+muon:
+  adam_lr: 1.0e-4
+
+trainer:
+  gradient_clip_val: 2.0
+  per_device_batch_size: 64
+  global_batch_size: 128
+  checkpoint_every_n_steps: 2500
+  val_check_interval: 2500
+  num_workers: 8
+  num_train_steps: 600000
+  ema:
+    decays: [0.999, 0.9999]
+    active_decay: 0.999
+
+sampling:
+  enabled: false

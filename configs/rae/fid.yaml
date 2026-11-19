@@ -1,0 +1,46 @@
+# FID-50k of a class-conditional map (scripts/rae/eval_fid.py). The model, latent and dataset come from the checkpoint's own
+# training config; checkpoint_path may be an export (sbm_rae.infer), a training checkpoint or a run folder (checkpoint_dir).
+checkpoint_dir: null
+checkpoint_path: null
+include_last: true
+latest_only: true
+# the ImageNet val JPEGs (<class>/<image>.JPEG); null = <data_dir>/val of the checkpoint's training config
+real_dir: null
+seed: null
+
+fid:
+  feature_dim: 2048
+  num_fake_samples: 50000
+  num_real_samples: null
+  real_split: test          # the name in the cached real statistics (<store>/ckpt/imagenet/fid_cache/real_<dataset>_<split>_<n>_<dim>.pt)
+  sample_batch_size: 250    # the noise stream depends on it: 250 is the published reads' batch
+  real_batch_size: 250
+  vae_batch_size: 25
+  generation_steps: [1]     # network evaluations per sample (the published numbers use one)
+  num_workers: 4
+  class_labels: []          # [] = the classes 0..999 cycled
+  # read settings; null = the export's meta["read"] (the published read)
+  omega: null
+  omegas: []
+  w: null
+  ws: []
+  label_scale: null
+  seed_offset: null
+  # the same samples also scored against these statistics; adm = the ADM ImageNet-train reference of the published numbers
+  extra_refs:
+    adm: ${sbm_store:ckpt/imagenet/fid_cache/adm_jit_in256_stats.npz}
+  save_generated_dir: null
+  skip_existing: false
+  # training checkpoints hold several EMA copies; an export holds one
+  ema_decays: [0.999, 0.9999]
+  strict_ema_decays: false
+  score_raw: false          # also score the raw (non-averaged) weights of a training checkpoint
+  wandb:
+    enabled: false
+    project: sbm_rae
+    entity: null
+    run_name: null
+
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/outputs/fid/${now:%Y-%m-%d_%H-%M-%S}

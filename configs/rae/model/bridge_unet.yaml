@@ -1,0 +1,12 @@
+# DriftWorld's Bridge_UNet as the one-step map (sbm_rae.models.bridge_unet): in_channels = the latent's channels (SD3 VAE 16, SD-VAE 4)
+name: Bridge_UNet
+in_channels: 16
+num_steps_conditioning: ${dataset.n_history}
+num_actions: ${dataset.action_dim}
+cond_channels: 256
+depths: [2, 2, 2, 2]
+channels: [160, 320, 640, 640]
+attn_depths: [0, 0, 1, 1]
+action_token_dim: 256
+action_token_mode: per_frame_component
+film_actions: true

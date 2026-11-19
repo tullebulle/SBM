@@ -1,0 +1,23 @@
+# @package _global_
+# The RT-1 world model: the Bridge-V2 recipe (experiment/wm_bridge.yaml) on DriftWorld's conversion of RT-1
+# (fractal20220817_data; 10-D actions, frames resized 256x320 -> 256x256 with BRIDGE_FRAME_SIZE=256), at global batch 256
+# and lr 4e-4: constant to 800k steps, then a 120k-step cosine cool-down to 5 % (as in wm_bridge.yaml, with
+# lr.decay_start_step=800000 lr.decay_end_step=920000 trainer.num_train_steps=920000).
+# Read: EMA 0.999, omega 0.9 -> SSIM 0.880 / PSNR 26.90 / LPIPS 0.057 / FID 4.02 / FVD 16.2 at step 920,000.
+defaults:
+  - wm_bridge
+  - override /dataset: rt1
+
+dataset:
+  action_dim: 10
+  latent_cache_dir: ${sbm_store:data/rt1/latents_sd3}
+
+model:
+  num_actions: 10
+
+lr:
+  val: 4.0e-4
+
+trainer:
+  global_batch_size: 256
+  num_train_steps: 800000

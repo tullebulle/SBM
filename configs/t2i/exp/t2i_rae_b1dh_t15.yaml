@@ -1,0 +1,60 @@
+# @package _global_
+# SBM-B text-to-image, stage 1 (CC12M pre-training): the one-step guided CBM map in the DINOv2-S representation latent,
+# from scratch. The ImageNet RAE recipe (configs/rae/experiment/rae_record.yaml) carried over unchanged where text allows:
+#   latent      frozen DINOv2-S/14 with registers at 224 px -> 16 x 16 x 384, normalised per element (RAE; sbm_t2i.codec);
+#               the released ImageNet ViT-XL decoder (256 px) for reads
+#   network     DiT-B/1-DH-t15 (15 DiT-B trunk blocks, the 2 x 1024 DDT head; 254M, MM-JiT-B/16's size) + cross-attention to the prompt and the
+#               pooled prompt in adaLN (sbm_t2i.dit_t2i.TextDiT); FLAN-T5-Large states, frozen (MiniT2I's text side)
+#   objective   loss.guided_cbm as the ImageNet run: time shift alpha = sqrt(256 * 384 / 4096) = 4.899 (interpolant
+#               x = (1 - s_a) z + s_a x_data, s_a = s / (s + alpha (1 - s)), s = 1 data), balance freeze, transport
+#               weight 1, guide from 35,000 with kappa 0.8 on nominal [0.35, 0.6], guided endpoint, teacher = the
+#               active EMA (0.999) copied at the guide start and refreshed every 10,000, late-band endpoint weight, half
+#               the transport times on the late path, prompt dropout 0.1
+#   optimiser   Muon 5e-4 / AdamW 5e-5, constant, global batch 256, per-rank random draws (per_rank_seed); gradient
+#               clipping at 1e5 (a guard only) and the plain-attention student forward
+#   speed       torch.compile of the teacher, student forward and JVP; batched Muon; foreach EMA
+# Data: CC12M with MiniT2I's LLaVA-NeXT recaptions (their pretraining set), images read at 256 px (shorter side, centre
+# crop; no flips: prompts name left and right). The later stages (the 120k alignment mix, then head-only training) are
+# overrides of this run's run.yaml (README).
+exp_name: t2i_rae_b1dh_t15
+model: {name: TextDiT-B/1-DH-t15, input_size: 16, in_channels: 384, txt_dim: 1024, txt_len: 256, text_depth: 2,
+        pooled_cond: true, tangent_only_jvp: true, label_dim: 1000}
+codec:
+  kind: rae
+  rae_src: ${repo:}/third_party/RAE/src
+  encoder: ${store:}/rae/assets/hf_home/hub/models--facebook--dinov2-with-registers-small/snapshots/0d9846e56b43a21fa46d7f3f5070f0506a5795a9
+  encoder_size: 224
+  decoder: ${store:}/rae/assets/rae/decoders/dinov2/wReg_small/ViTXL_n08/model.pt
+  decoder_config: ${store:}/rae/assets/rae/decoder_config_ViTXL
+  decoder_patch: 16
+  stats: ${store:}/rae/assets/rae/stats/dinov2/wReg_small/imagenet1k/stat.pt
+  dtype: fp32
+data:
+  kind: text_image
+  shards: ${store:}/t2i/data/raw/cc12m/cc12m-train-*.tar
+  caption_dir: ${store:}/t2i/data/shards/cc12m_captions
+  text_encoder: ${store:}/t2i/weights/flan-t5-large
+  image_size: 256
+  latents_scale: 1.0
+  num_workers: 8
+loss:
+  name: guided_cbm
+  guided_cbm:
+    time_shift: 4.899
+    transport: {weight: 1.0}
+    balance: {mode: freeze}
+    guide: {kappa: 0.8, start_step: 35000}
+optim: {name: muon, lr: 5.0e-4, adam_lr: 5.0e-5, schedule: constant, batched: true, clip: 100000.0}
+train:
+  max_steps: 1000000          # CC12M (~10.9M pairs): ~42,500 updates per epoch at batch 256
+  global_batch: 256
+  per_device_batch: 16          # 16 GPUs x 16; on fewer GPUs gradient accumulation fills the global batch
+  checkpoint_every: 5000
+  val_every: null
+  per_rank_seed: true
+  sync_free: true
+  ema: {decays: [0.999, 0.9999], active: 0.999, min_step: 100, foreach: true}
+  compile: {teacher: true, student_fwd: true, student_jvp: true, fwd_attention: plain}   # sbm_t2i.speed
+  # one-step COCO FID-10k + CLIP of the EMA-0.9999 copy at anchor 0.8, label scales 1 and 1.25 (16 ranks x 625 captions);
+  # decoded at 256 px by the ImageNet decoder: a trend, not a benchmark number
+  monitor: {every: 5000, n_per_rank: 625, decays: [0.9999], omega: 0.8, batch: 125, label_scales: [1.0, 1.25]}

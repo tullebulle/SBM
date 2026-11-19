@@ -1,0 +1,46 @@
+# @package _global_
+# SBM-B/2 from scratch on the ADM-preprocessed SD-VAE latents (the paper's B/2 map: 780k steps of batch 256 = 156 epochs,
+# about 100 EFLOP; FID-50k 5.85 read at omega 0.8, label scale 1.25, EMA 0.999). On top of exp/b2_btm.yaml (time mean
+# 0.8 -> 0.0 at 25k, lr 1e-3): the null class trained and anchors down to 0.35, half the transport times on the late path,
+# the final-layer balancer on smoothed norms, and self-guidance (kappa 0.8, i.e. omega 5) from step 35k read from a frozen
+# EMA copy refreshed every 10k steps; constant lr to 600k, then a cosine cool-down to 0 at 780k.
+# The paper's map was trained as consecutive resumed segments of this recipe (init.resume_state), which is the same run up
+# to nondeterminism. Measured: about 12k steps per hour on 4 H200 (a guided step costs 1.46 unguided steps).
+defaults:
+  - b2_btm
+exp_name: b2_sbm
+loss:
+  label_dropout: 0.1                      # the null class is trained (the guide reads it) ...
+  anchor_alpha: 0.65                      # ... and anchors U[0.35, 1] reach down to the guided band's start
+  time: {mix_frac: 0.5, mix_lo: 0.3}      # half the transport times uniform on [0.3, omega)
+  balance: {mode: ema}                    # the final-layer balancer on EMA(0.99)-smoothed norms
+  guide:                                  # self-guidance from step 35k (7 epochs), kappa 0.8 (= omega 5), frozen teacher
+    enabled: true
+    w: 1.0
+    kappa: 0.8
+    endpoint: true
+    diag_frac: 0.5
+    start_step: 35000
+    teacher_decay: 1.0                    # the decay-1.0 EMA copy ...
+    teacher_refresh: 10000                # ... refreshed from the active EMA every 10k steps
+optim:
+  lr: 1.0e-3
+  schedule: staged                        # no x0.3 stage inside the run (stage_step 1e9) ...
+  stage_step: 1000000000
+  stage_factor: 0.3
+  decay_start_step: 600000                # ... constant lr to 600k (120 epochs), then the cosine cool-down to 0 at 780k
+  decay_end_step: 780000
+train:
+  max_steps: 780000                       # 156 epochs
+  per_device_batch: 64                    # batch 256 = 4 GPUs x 64 (gradient accumulation on fewer GPUs)
+  checkpoint_every: 20000
+  val_every: 0
+  sync_free: true
+  ema: {decays: [0.999, 0.9999, 1.0], active: 0.999, min_step: 100, foreach: true}   # 1.0 = the guide's frozen teacher
+  monitor:
+    every: 5000
+    n_per_rank: 2500                      # x 4 GPUs = FID-10k pooled
+    decays: [0.999, 0.9999]
+    omega: 0.8
+    label_scales: [1.0, 1.5]
+    steps_per_epoch: 5004.56

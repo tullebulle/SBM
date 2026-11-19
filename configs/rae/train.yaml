@@ -1,0 +1,277 @@
+# sbm_rae training config (scripts/rae/train.py). Two model families share it:
+#   ImageNet         DiT-XL/1-DH (or DiT-B/1-DH) on the RAE DINOv2-S latent (16x16x384), loss.name=guided_cbm
+#                    (sbm_rae.guided_cbm); the released recipe is experiment/rae_record.yaml
+#   world models     Bridge_UNet on the SD3-VAE latent, loss.name=bridge_cbm (sbm_rae.bridge_loss), dataset=bridge | rt1;
+#                    recipes in experiment/wm_bridge.yaml and experiment/wm_rt1.yaml
+# Paths resolve through the store (SBM_STORE, default <repo>/store; sbm_rae.paths) and SBM_IMAGENET_DIR (the ImageNet JPEGs).
+defaults:
+  - _self_
+  - dataset: imagenet
+  - model: dit_xl_1_dh
+
+seed: 42
+resume_from_checkpoint: null
+# Start a FRESH run from another checkpoint's weights (scripts/rae/train.py, _init_weights_from_checkpoint): the network
+# weights only, optimizer / schedulers / step from zero. init_weights_source: state_dict (the active EMA) | current_model_state
+init_weights_from: null
+init_weights_source: state_dict
+init_weights_allow_missing: null
+# ImageNet JPEG root with train/ and val/ (sbm_rae.data.ImageNetDataModule, on-the-fly encoding; the FID scorer reads
+# <data_dir>/val as the real images). Default: <store>/data/imagenet_1k (train/ and val/ class folders).
+data_dir: ${oc.env:SBM_IMAGENET_DIR,${sbm_store:data/imagenet_1k}}
+# SD-VAE latent caches for dataset.use_precomputed_latents=true (the per-file cache and / or the packed arrays of
+# scripts/sbm/encode_imagenet.py); the RAE latent is encoded on the fly and needs neither
+latent_data_dir: null
+latent_pack_dir: null
+work_dir: null
+
+optimizer: Muon
+weight_decay: 0.0
+# freeze (sbm_rae.trainer): train only the parameters whose name matches; the rest are frozen (requires_grad
+# False, so out of the optimizer, DDP and the backward). trainable: null (everything trains) | head (the DDT head:
+# head_blocks, head_x_embedder, s_projector, final_layer) | head_last4 (the head + the last four trunk blocks of
+# DiT-XL/1-DH, as in experiment/rae_record.yaml) | a regex on the model's parameter names. A resume from a checkpoint of the full
+# model keeps the trainable parameters' optimizer state and drops the rest.
+freeze:
+  trainable: null
+
+muon:
+  momentum: 0.95
+  nesterov: true
+  ns_coefficients: [3.4445, -4.7750, 2.0315]
+  eps: 1.0e-7
+  ns_steps: 5
+  adjust_lr_fn: original
+  # speed (sbm_rae.speed.BatchedMuon): the same update with Newton-Schulz batched over same-shaped matrices; false = stock
+  batched: false
+  adam_lr: 1.0e-4
+  adamw_betas: [0.9, 0.95]
+  adamw_eps: 1.0e-8
+
+# The latent codec (sbm_rae.trainer.TrainingModule.vae). kind: rae = the RAE (frozen DINOv2-with-registers encoder of
+# `rae_size` + the released ViT-XL decoder, sbm_rae.rae_adapter; weights in $SBM_STORE/rae/assets, HF_HOME offline);
+# sdvae = the diffusers AutoencoderKL below (subfolder for a VAE inside a larger repo, e.g. the SD3 VAE). The scale /
+# bias are the model-space affine ((z - bias) * scale); the RAE latent is already normalized (1 / 0), the SD-VAE uses 0.18215.
+vae:
+  enabled: true
+  kind: rae
+  rae_size: small
+  rae_decoder: ViTXL_n08
+  latents_scale: 1.0
+  latents_bias: 0.0
+  pretrained_model_name_or_path: stabilityai/sd-vae-ft-mse
+  subfolder: null
+  local_files_only: true
+
+# The REPA representation-cache pipeline is not included; this block is still read by the entry points and must remain
+# disabled (loss.guided_cbm.repa below is the self-contained variant on the clean latent).
+repa:
+  enabled: false
+
+# The anchor: the network is conditioned on omega ~ U[1 - alpha, 1] (sbm_rae.guided_cbm draws its own anchor_alpha below;
+# this block feeds the sampling callback's conditioning grid, sbm_rae.trainer.IterativeSamplingCallback).
+anchor:
+  enabled: true
+  alpha: 0.4
+  restrict_transport: false
+
+# Give every DDP rank its own RNG stream for the loss (noise, t, omega, dropout).
+per_rank_seed: false
+
+# Classifier-free-guidance training with the native rule; off (guided_cbm has its own label dropout). Read by
+# sbm_rae.loss.resolve_guidance_config to size the network (model.guidance_enabled) and by the sampling callback.
+guidance:
+  enabled: false
+  mode: negative
+  w_min: 0.2
+  class_drop_prob: 0.1
+  beta: 1.0
+  alpha_range: [1.0, 5.0]
+
+# The signed transport rule is not included; the block is still read (sbm_rae.loss.resolve_signed_config:
+# amortised.enabled sizes the network's w embedding) and must stay off.
+signed:
+  enabled: false
+  alpha: 0.0
+  amortised:
+    enabled: false
+
+lr:
+  val: 1.0e-3
+  warmup_steps: 5000
+  # Reassert val after a resume, overriding the LR carried in the checkpoint's optimizer and scheduler state
+  # (sbm_rae.lr_override). Required for any deliberate schedule change on a resumed run.
+  force_on_resume: false
+  # constant | cosine (a tail from decay_start_step to decay_end_step, in global steps, down to min_factor x val) |
+  # staged (factor 1 until stage_step, then stage_factor, then the cosine tail)
+  schedule: constant
+  decay_start_step: 0
+  decay_end_step: 0
+  min_factor: 0.0
+
+weighting_model:
+  enabled: false
+  channels: 128
+  clamp_min: -10.0
+  clamp_max: 10.0
+  transport: true
+  self_consistency: false
+  endpoint: false
+
+loss:
+  # guided_cbm (sbm_rae/guided_cbm.py): the self-guided objective (ImageNet recipe: experiment/rae_record.yaml);
+  # bridge_cbm (sbm_rae/bridge_loss.py): the same on the world model's condition dict. Every time below is nominal, the
+  # interpolant sits at s / (s + time_shift (1 - s)).
+  name: guided_cbm
+  guided_cbm:
+    time_shift: 1.0
+    time:
+      p_mean: -1.2
+      p_std: 1.0
+      eps: 1.0e-4
+      mix_frac: 0.5
+      mix_lo: 0.3
+    anchor_alpha: 0.65
+    label_dropout: 0.1
+    transport:
+      p: 1.0
+      c: 0.01
+      weight: 2000.0
+    endpoint:
+      p: 0.0
+      c: 0.01
+      weight: 1.0
+      late_weight:
+        t0: 0.6
+        power: 1.0
+        cap: 8.0
+      # null: the late band is weighted from guide.start_step on
+      late_weight_start_step: null
+    # none: fixed weights (transport.weight, endpoint.weight); freeze: final-layer balancer until guide.start_step, then its
+    # EMA frozen as the transport weight (transport.weight then multiplies it, set it to 1)
+    balance:
+      mode: none
+      parameter_path: final_layer
+      ema: 0.999
+    guide:
+      enabled: true
+      kappa: 0.8
+      t_lo: 0.35
+      t_hi: 0.6
+      endpoint: true
+      diag_frac: 0.5
+      start_step: 2000
+      teacher_refresh: 10000
+      # null: copy the teacher from the active EMA; a decay (e.g. 0.9999): from that EMA copy
+      teacher_source: null
+      # refresh the teacher at the first guided step of this run (a continuation that changes the teacher source)
+      teacher_refresh_at_start: false
+      # iMF's fix (arXiv 2512.02012, Sec. 4.1): from the guide start, the transport JVP runs along the teacher's
+      # denoiser velocity b(y) instead of the conditional V = x - z, for nominal t in [t_lo, t_hi] (t_lo null: 1 - anchor_alpha)
+      marginal_tangent:
+        enabled: false
+        t_lo: null
+        t_hi: 0.95
+      # autoguidance (Karras et al. 2024): on the guided band the transport tangent and the endpoint target also get
+      # + weight (b(y) - b_weak(y)) (resp. D(y) - D_weak(y)), read from a frozen weaker checkpoint of the same model
+      # (ckpt; its EMA `ema`, null = the checkpoint's active EMA). The teacher compounds both terms: kappa + weight < 1.
+      # The weak network is loaded lazily from `ckpt` (sbm_rae.guided_cbm.load_weak_state); its weights are not in the store.
+      autoguide:
+        enabled: false
+        ckpt: null
+        weight: 0.0
+        ema: null
+      # guidance-scale conditioning (iMF's trained CFG scale): every example draws a scale w ~ U[lo, hi], the network gets
+      # it as an input (model.guidance_enabled, set by the trainer) and the guide follows it at the self-referential fixed
+      # point; the read picks w (fid.w; default w0) instead of extrapolating the label (fid.label_scale)
+      scale_cond:
+        enabled: false
+        lo: 2.0
+        hi: 8.0
+        lr_mult: 1.0
+    # REPA on the clean latent (RAEv2): align the trunk's block-k tokens (through a training-only projector) with the
+    # clean latent's tokens; needs model.repa_enabled=true and model.repa_z_dim = the latent's channels
+    repa:
+      enabled: false
+      weight: 0.5
+    tangent_only_jvp: true
+
+trainer:
+  # 32 per device x 8 GPUs = global batch 256 (gradient accumulation on fewer devices)
+  per_device_batch_size: 32
+  global_batch_size: 256
+  num_workers: 8
+  num_epochs: null
+  num_train_steps: 1000000
+  accelerator: auto
+  devices: auto
+  num_nodes: 1
+  strategy: auto
+  # Collective timeout for ddp. The default 30 min is shorter than a bad checkpoint stall on a contended shared filesystem.
+  ddp_timeout_minutes: 120
+  precision: bf16-mixed
+  log_every_n_steps: 25
+  gradient_clip_val: null
+  checkpoint_every_n_steps: 5000
+  # Dense early, sparse late: past checkpoint_sparse_after steps only every checkpoint_sparse_every-th step is saved
+  # (null = every checkpoint_every_n_steps throughout). Needs checkpoint_local_dir.
+  checkpoint_sparse_after: null
+  checkpoint_sparse_every: null
+  # A node-local directory (e.g. /tmp/sbm_rae-ckpt) stages checkpoints there and mirrors them to the run directory on a
+  # background thread (sbm_rae.checkpoint_io), for slow shared filesystems; null writes them to the run directory directly.
+  checkpoint_local_dir: null
+  checkpoint_every_n_epochs: null
+  overfitting:
+    enabled: false
+    invariant_plot:
+      enabled: true
+      every_n_steps: ${sampling.every_n_steps}
+      max_images: 16
+  val_check_interval: 1000
+  check_val_every_n_epoch: null
+  limit_val_batches: 8
+  ema:
+    enabled: true
+    decays: [0.99, 0.999, 0.9999]
+    active_decay: 0.999
+    min_step: 100
+    use_buffers: true
+    # speed: one multi-tensor (foreach) update per EMA instead of a per-parameter loop; false = stock
+    foreach: false
+  # speed (sbm_rae.speed): torch.compile of the guided-CBM step's network calls, each separately; all false = stock eager
+  # (the fastest setting turns on all three, with muon.batched and trainer.ema.foreach)
+  compile:
+    teacher: false
+    student_fwd: false
+    student_jvp: false
+    mode: default
+
+sampling:
+  enabled: true
+  every_n_steps: 2000
+  n_samples: 64
+  vae_batch_size: 64
+  use_val_labels: true
+  class_labels: []
+  seed_offset: 12345
+  train_interpolation_plot:
+    enabled: false
+    every_n_steps: ${sampling.every_n_steps}
+    max_images: ${trainer.per_device_batch_size}
+    t_values: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    seed_offset: 23456
+
+logging:
+  use_wandb: true
+  project: sbm_rae
+  name: ${dataset.name}-${model.name}-${now:%Y%m%d-%H%M%S}
+  entity: null
+  offline: false
+  save_code: true
+  loss_grad_norms:
+    enabled: false
+    every_n_steps: ${trainer.log_every_n_steps}
+
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/outputs/${now:%Y-%m-%d_%H-%M-%S}

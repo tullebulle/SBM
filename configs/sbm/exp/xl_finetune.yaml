@@ -1,0 +1,12 @@
+# @package _global_
+# Fine-tune the released SBM-XL/2 map (scripts/download: <store>/ckpt/imagenet/) with the XL recipe (exp/xl_sbm.yaml): a new
+# run from step 0 on its weights, the guide on from the first step (the map is already guided).
+# e.g. python -m sbm.cli train xl_finetune name=xl_ft train.max_steps=20000 optim.lr=1e-4
+defaults:
+  - xl_sbm
+exp_name: xl_finetune
+init: {from: "${store:}/ckpt/imagenet/sbm_sdvae_xl_step355000_ema0_9999.pt", weights: ema, resume_state: false}
+loss:
+  guide: {start_step: 0}
+train:
+  max_steps: 50000

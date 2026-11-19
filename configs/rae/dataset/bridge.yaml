@@ -1,0 +1,13 @@
+# Bridge-V2 clips for the world model (sbm_rae.bridge_data; DriftWorld's processed layout under processed_dir/<split>/).
+# The data lives in the store: $SBM_STORE/data/bridge (sbm_rae.paths; prepared by scripts/rae/wm/data).
+name: bridge
+processed_dir: ${sbm_store:data/bridge/processed/bridge_v2}
+img_resolution: 256
+num_classes: 1
+n_frames: 5          # 4 history frames + the target (DriftWorld)
+n_history: 4
+action_dim: 7
+use_precomputed_latents: false
+val_episodes: 256    # episodes of the val split used for the training-time validation loss
+encode_chunk: 64     # frames per codec encode call
+latent_cache_dir: null   # scripts/rae/cache_bridge_latents.py output: windows of cached latents instead of frames

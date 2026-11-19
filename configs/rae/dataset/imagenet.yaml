@@ -1,0 +1,14 @@
+name: imagenet
+img_resolution: 256
+num_classes: 1000
+use_precomputed_latents: true
+latent_cache_batch_size: 64
+latent_cache_num_workers: 4
+filter_for_classes: false
+filter_class_indices: []
+# Training-image preparation on the on-the-fly encoding path (use_precomputed_latents=false, e.g. the RAE latent):
+# crop: torchvision = Resize(256) bilinear + CenterCrop (the original); adm = ADM's center_crop_arr (box halving, then
+#   bicubic), which the ADM reference statistics, DiT and RAE training use (sbm_rae/data.py center_crop_arr)
+# hflip: a random horizontal flip (p 0.5) of training images; validation is never flipped
+crop: torchvision
+hflip: false

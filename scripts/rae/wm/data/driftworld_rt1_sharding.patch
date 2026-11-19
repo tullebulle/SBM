@@ -1,0 +1,141 @@
+diff --git a/rt1_driftworld/datasets/download_data.py b/rt1_driftworld/datasets/download_data.py
+index 4e2b42f..1d54605 100644
+--- a/rt1_driftworld/datasets/download_data.py
++++ b/rt1_driftworld/datasets/download_data.py
+@@ -164,7 +164,8 @@ def _write_episode(
+     video_sha1 = hashlib.sha1(np.ascontiguousarray(video).tobytes()).hexdigest()
+ 
+     mp4_path = str(base_path) + ".mp4"
+-    if overwrite or not os.path.exists(mp4_path):
++    # an mp4 under 1 KB (left by a job killed mid-write) counts as missing, so a resumed run re-encodes it
++    if overwrite or not os.path.exists(mp4_path) or os.path.getsize(mp4_path) <= 1024:
+         iio.imwrite(mp4_path, video, fps=fps, codec="libx264")
+         decoded_n = len(VideoReader(mp4_path, ctx=cpu(0), num_threads=1))
+         if decoded_n != video.shape[0]:
+@@ -209,6 +210,9 @@ def convert_dataset(
+     val_holdout_n: int | None = None,
+     val_seed: int = 42,
+     overwrite: bool = False,
++    num_shards: int = 1,
++    shard_id: int = 0,
++    finalize_manifest: bool = False,
+ ) -> None:
+     """
+     Convert the RT-1 TFDS `train` split into per-episode artifacts under
+@@ -223,6 +227,13 @@ def convert_dataset(
+     dataset_output_dir = Path(output_dir) / dataset_name
+     dataset_output_dir.mkdir(parents=True, exist_ok=True)
+ 
++    train_dir = dataset_output_dir / "train"
++    val_dir = dataset_output_dir / "val"
++    train_dir.mkdir(exist_ok=True)
++    val_dir.mkdir(exist_ok=True)
++    if finalize_manifest:
++        _write_manifests(train_dir, val_dir)
++        return
+     print("Building dataset...")
+     try:
+         dataset_builder = tfds.builder_from_directory(
+@@ -248,17 +259,17 @@ def convert_dataset(
+         f"| train: {effective_total - val_n} | val (random holdout, seed={val_seed}): {val_n}"
+     )
+ 
+-    train_dir = dataset_output_dir / "train"
+-    val_dir = dataset_output_dir / "val"
+-    train_dir.mkdir(exist_ok=True)
+-    val_dir.mkdir(exist_ok=True)
++    start = shard_id * effective_total // num_shards
++    end = (shard_id + 1) * effective_total // num_shards
++    val_before = sum(1 for v in val_indices if v < start)
++    print(f"shard {shard_id}/{num_shards}: global range [{start}, {end}) ({end - start} episodes); counters at start: train {start - val_before}, val {val_before}")
+ 
+     read_config = tfds.ReadConfig(
+         interleave_cycle_length=1,
+         interleave_block_length=1,
+     )
+     dataset = dataset_builder.as_dataset(
+-        split="train", shuffle_files=False, read_config=read_config
++        split=f"train[{start}:{end}]", shuffle_files=False, read_config=read_config
+     )
+     options = tf.data.Options()
+     options.experimental_deterministic = True
+@@ -266,12 +277,13 @@ def convert_dataset(
+     dataset = dataset.prefetch(tf.data.AUTOTUNE)
+     dataset = tfds.as_numpy(dataset)
+ 
+-    train_count = 0
+-    val_count = 0
++    train_count = start - val_before
++    val_count = val_before
+ 
+     print("Processing train split (with seeded random val holdout)...")
+-    for gidx, episode in tqdm(enumerate(dataset), desc=f"{dataset_name}"):
+-        if gidx >= effective_total:
++    for j, episode in tqdm(enumerate(dataset), desc=f"{dataset_name} shard {shard_id}", total=end - start):
++        gidx = start + j
++        if gidx >= end:
+             print(f"Reached effective_total={effective_total}; stopping.")
+             break
+ 
+@@ -288,6 +300,7 @@ def convert_dataset(
+         try:
+             if not overwrite \
+                     and os.path.exists(str(base_path) + ".mp4") \
++                    and os.path.getsize(str(base_path) + ".mp4") > 1024 \
+                     and os.path.exists(str(base_path) + ".npz") \
+                     and os.path.exists(str(base_path) + ".txt") \
+                     and os.path.exists(str(base_path) + ".meta.json"):
+@@ -299,6 +312,13 @@ def convert_dataset(
+             print(f"Failed to process episode g{gidx} ({base_path}): {e}")
+             continue
+ 
++    if num_shards > 1:
++        print("sharded run: manifests are written by --finalize_manifest")
++        return
++    _write_manifests(train_dir, val_dir)
++
++
++def _write_manifests(train_dir, val_dir):
+     for split, dir_ in (("train", train_dir), ("val", val_dir)):
+         meta_files = sorted(dir_.glob("*.meta.json"))
+         rows = []
+@@ -325,6 +345,9 @@ def main(
+     val_holdout_n: int | None = None,
+     val_seed: int = 42,
+     overwrite: bool = False,
++    num_shards: int = 1,
++    shard_id: int = 0,
++    finalize_manifest: bool = False,
+ ) -> None:
+     """
+     Entry point.
+@@ -357,6 +380,9 @@ def main(
+         val_holdout_n=val_holdout_n,
+         val_seed=val_seed,
+         overwrite=overwrite,
++        num_shards=num_shards,
++        shard_id=shard_id,
++        finalize_manifest=finalize_manifest,
+     )
+ 
+ 
+@@ -400,6 +426,9 @@ if __name__ == "__main__":
+         action="store_true",
+         help="Force re-encode/rewrite existing artifacts (ignore existing files)."
+     )
++    parser.add_argument("--num_shards", type=int, default=1)
++    parser.add_argument("--shard_id", type=int, default=0)
++    parser.add_argument("--finalize_manifest", action="store_true")
+     cli = parser.parse_args()
+     main(
+         dataset_name=cli.dataset_name,
+@@ -408,6 +437,9 @@ if __name__ == "__main__":
+         fps=cli.fps,
+         max_episodes=cli.max_episodes,
+         val_holdout_frac=cli.val_holdout_frac,
++        num_shards=cli.num_shards,
++        shard_id=cli.shard_id,
++        finalize_manifest=cli.finalize_manifest,
+         val_holdout_n=cli.val_holdout_n,
+         val_seed=cli.val_seed,
+         overwrite=cli.overwrite,

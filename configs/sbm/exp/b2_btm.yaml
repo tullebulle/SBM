@@ -1,0 +1,9 @@
+# @package _global_
+# The BTM objective from scratch (no guidance), DiT-B/2, batch 256, 200k steps (40 epochs): lr 1e-3, x0.3 from step 75k,
+# cosine to 0 over 175k-200k; logit-normal transport-time mean 0.8 for the first 5 epochs, then 0.0. The unguided
+# baseline of the SBM ablations and the base of exp/b2_sbm.yaml.
+exp_name: b2_btm
+loss:
+  time: {p_mean: 0.8, p_mean_end: 0.0, anneal_start: 25000, anneal_steps: 1}
+optim: {lr: 1.0e-3, schedule: staged, stage_step: 75000, stage_factor: 0.3, decay_start_step: 175000, decay_end_step: 200000}
+train: {max_steps: 200000}

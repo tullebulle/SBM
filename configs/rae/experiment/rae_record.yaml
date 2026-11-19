@@ -1,0 +1,70 @@
+# @package _global_
+# ImageNet 256x256, DiT-XL/1-DH on the RAE DINOv2-S latent: the final training stage of the released model (FID-50k 1.61
+# with one network evaluation, read at EMA 0.9999, omega 0.8, label scale 1.35). The model was trained from scratch with
+# the guided objective (lr 5e-4), then fine-tuned with autoguidance; this stage trains the DDT head and the last four
+# trunk blocks at lr 1e-5. The weak network for autoguidance (guide.autoguide.ckpt, an early checkpoint of the same run)
+# is not released: point it at your own weaker checkpoint, or set guide.autoguide.enabled=false.
+defaults:
+  - override /model: dit_xl_1_dh
+  - override /dataset: imagenet
+
+model:
+  input_size: 16
+  in_channels: 384
+  attn_func: default
+  dropout: 0.0
+
+vae:
+  enabled: true
+  kind: rae
+  rae_size: small
+  latents_scale: 1.0
+  latents_bias: 0.0
+
+dataset:
+  use_precomputed_latents: false
+
+freeze:
+  trainable: head_last4
+
+muon:
+  batched: true
+  adam_lr: 1.0e-6
+
+lr:
+  val: 1.0e-5
+  warmup_steps: 0
+  force_on_resume: true
+
+loss:
+  name: guided_cbm
+  guided_cbm:
+    time_shift: 4.899
+    transport:
+      weight: 1
+    balance:
+      mode: freeze
+    guide:
+      start_step: 35000
+      kappa: 0.7273
+      autoguide:
+        enabled: true
+        ckpt: ${sbm_store:rae/refs/autoguide_weak.ckpt}
+        weight: 0.0909
+
+trainer:
+  per_device_batch_size: 32
+  global_batch_size: 256
+  num_workers: 14
+  num_train_steps: 1042500
+  gradient_clip_val: null
+  checkpoint_every_n_steps: 2500
+  ema:
+    foreach: true
+  compile:
+    teacher: true
+    student_fwd: true
+    student_jvp: true
+
+sampling:
+  enabled: false

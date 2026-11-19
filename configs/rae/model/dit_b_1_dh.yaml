@@ -1,0 +1,12 @@
+# DiT-B/1 with a wide DDT head budgeted like DiT-XL/1-DH (sbm_rae.models.dit.DiT_B_1_DH): 8 trunk blocks at 768 + 2 head
+# blocks at 1024; 128.3 M parameters on the RAE DINOv2-S latent (16x16x384, the defaults below).
+name: DiT-B/1-DH
+input_size: 16
+in_channels: 384
+mlp_ratio: 4.0
+label_dim: ${dataset.num_classes}
+learn_sigma: false
+qk_norm: false
+attn_func: fa3
+is_zero_data: true
+dropout: 0.0

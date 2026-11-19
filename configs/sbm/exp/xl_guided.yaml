@@ -1,0 +1,25 @@
+# @package _global_
+# The XL recipe's base: a DiT-XL/2 trained for 1240 epochs with the unguided BTM objective (Lee et al., BTM; FID 17.4)
+# continued with self-guidance in its own recipe (Muon, logit-normal p_mean -1.2, label dropout 0.1, transport p 1, plain
+# endpoint) with iMF's guidance rule: tangent V + kappa (b(y) - b(null)) on t in [0.35, 0.6], guided endpoint, diagonal
+# rows 0.5, anchors down to 0.35; the first 2000 steps (anchors + null class warm-up) are unguided. The BTM base checkpoint
+# is not distributed with this repository: put it at init.from, or fine-tune the released map (exp/xl_finetune.yaml).
+exp_name: xl_guided
+model: {name: DiT-XL/2, tangent_only_jvp: true}
+init: {from: "${store:}/refs/bases/dit_xl2_1p55M_ema9999.pt", weights: ema}
+loss:
+  time: {p_mean: -1.2}
+  anchor_alpha: 0.65
+  label_dropout: 0.1
+  guide: {enabled: true, w: 1.0, kappa: 0.6666667, endpoint: true, diag_frac: 0.5, start_step: 2000}
+optim: {name: muon, lr: 5.0e-4}
+train:
+  max_steps: 60000
+  global_batch: 256
+  per_device_batch: 64
+  checkpoint_every: 2500
+  val_every: 0
+  sync_free: true
+  ema: {decays: [0.999, 0.9999], active: 0.999, min_step: 100, foreach: true}
+  monitor: {every: 1000, n_per_rank: 2500, decays: [0.999], omega: 0.9, batch: 250, vae_batch: 50, refs: [adm]}
+data: {num_workers: 3}

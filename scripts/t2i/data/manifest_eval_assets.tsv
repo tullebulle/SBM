@@ -1,0 +1,11 @@
+1956960	https://huggingface.co/datasets/MiniT2I/evaluation-assets/resolve/main/coco/coco-30-val-2014-captions.json	t2i/assets/coco/coco-30-val-2014-captions.json
+33571316	https://huggingface.co/datasets/MiniT2I/evaluation-assets/resolve/main/coco/mscoco_fid_stats_512.npz	t2i/assets/coco/mscoco_fid_stats_512.npz
+4186	https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/config.json	t2i/weights/clip-vit-base-patch32/config.json
+316	https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/preprocessor_config.json	t2i/weights/clip-vit-base-patch32/preprocessor_config.json
+2224041	https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/tokenizer.json	t2i/weights/clip-vit-base-patch32/tokenizer.json
+592	https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/tokenizer_config.json	t2i/weights/clip-vit-base-patch32/tokenizer_config.json
+389	https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/special_tokens_map.json	t2i/weights/clip-vit-base-patch32/special_tokens_map.json
+862328	https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/vocab.json	t2i/weights/clip-vit-base-patch32/vocab.json
+524657	https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/merges.txt	t2i/weights/clip-vit-base-patch32/merges.txt
+605247071	https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/pytorch_model.bin	t2i/weights/clip-vit-base-patch32/pytorch_model.bin
+85209	https://raw.githubusercontent.com/djghosh13/geneval/main/prompts/evaluation_metadata.jsonl	t2i/geneval/evaluation_metadata.jsonl

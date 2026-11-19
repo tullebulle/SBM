@@ -1,0 +1,215 @@
+# The trainer's defaults (class-conditional DiT-B/2 on SD-VAE latents); the text-to-image recipes are the experiments in
+# configs/t2i/exp/, each changing only what differs: `python -m sbm_t2i.cli train <exp> key=value ...`.
+name: ???                  # the run folder is <store>/runs/<YYYYMMDD-HHMMSS>_<name>; defaults to the experiment's name
+exp_name: null
+seed: 42
+mode: pretrain             # pretrain (Lightning, DDP) | finetune (single-GPU class-conditional fine-tuning loop)
+
+init:
+  from: null               # a checkpoint (Lightning, an inference export, a raw payload) or a run folder (its latest checkpoint)
+  weights: ema             # which weights of a Lightning checkpoint: ema (the active EMA copy) | raw | ema_0_9999 ...
+  resume_state: false      # true: continue its optimizer, scheduler, EMA and global step (a later training stage)
+
+model:
+  name: DiT-B/2
+  input_size: 32
+  in_channels: 4
+  label_dim: 1000
+  mlp_ratio: 4.0
+  train_pos_embed: false   # true: the sin-cos position embedding is trained as well
+  tangent_only_jvp: false  # under the JVP the token-path Linears + patch conv skip the GEMM on a zero weight tangent (bit-identical)
+  aux_taps: []             # intermediate supervision: side readouts after these block counts, e.g. [3, 6, 9]
+  gw_embedder: false       # G: a guidance-strength input w (zero-init embedder added to the conditioning; old checkpoints load)
+  gw_default: 1.0          # the w a caller that passes none gets (evaluator without gw=..., the monitor)
+  gw_input: raw            # raw: the embedder sees w | kappa: 1 - 1/w (iMF's Omega-conditioning, w = 1 unguided)
+  gw_interval: false       # two more zero-init embedders for the guidance interval [s_lo, s_hi] (iMF; needs gw_embedder)
+  txt_dim: 1024            # text-to-image (MMJiT-*, TextDiT-*): the text encoder's width (FLAN-T5-Large),
+  txt_len: 256             #   its prompt length,
+  omega_tokens: 4          #   the anchor's prefix tokens (0: the released time-blind denoiser),
+  fused_attention: true    #   the fused attention kernel outside the JVP; label_dim is the null prompt's row index
+  text_depth: 2            # TextDiT-* (latent text-to-image, sbm_t2i.dit_t2i): prompt refiner blocks,
+  pooled_cond: true        #   the pooled prompt added to the anchor embedding in the trunk's adaLN,
+  qk_norm: false           #   qk-norm in the image self-attention (the ImageNet DiT has none),
+  guidance_enabled: false  #   the guidance-scale input w (loss.guided_cbm.guide.scale_cond)
+  attn_fp32: false         #   every attention's logits / softmax / value product in fp32
+  trunk_split: 1           #   the trunk on a k-times finer token grid (k x k trunk tokens per latent token; 2: 1,024)
+
+data:
+  latent_pack_dir: ${store:}/data/imagenet_latents_packed   # class-conditional latents: train/, val/ (scripts/sbm/encode_imagenet.py)
+  latent_dir: ${store:}/data/imagenet_latents_sdvae_perfile  # per-file fallback
+  latents_scale: 0.18215
+  num_workers: 14
+  bank: null               # mode finetune: a fixed bank {targets (N, 2, 4, 32, 32), labels (N, 2)}
+  kind: latent             # latent | text_image: tar shards of {key}.jpg + {key}.txt read at model.input_size pixels
+  shards: null             #   text_image: a glob (or list of globs) of the shards
+  caption_dir: null        #   optional <shard stem>.json {key: caption} replacing the shards' captions
+  mix: null                #   text_image, off by default: a list of {shards, caption_dir, per_batch} read together, every
+                           #   batch holding per_batch samples of each (sum = train.per_device_batch); replaces shards
+  text_encoder: null       #   the frozen T5 encoder + tokenizer (a local folder), text_len tokens
+  text_len: 256
+  shuffle_buffer: 1000     #   samples per worker
+  image_size: null         #   text_image: the side images are read at (null: model.input_size; a codec's encoder input)
+
+codec:                     # a frozen representation autoencoder the map trains in (sbm_t2i.codec)
+  kind: null               # null: no codec (latents or pixels as before) | rae
+  rae_src: null            #   rae: the RAE code's src/ (third_party/RAE/src, github.com/bytetriper/RAE; `stage1.RAE`)
+  encoder: null            #   the frozen encoder (a local Hugging Face folder)
+  encoder_cls: Dinov2withNorm
+  encoder_size: 224        #   the side the encoder reads the image at (patch 14: 16 x 16 tokens)
+  decoder: null            #   the pixel decoder's weights (eval only; null: no decoder)
+  decoder_config: null     #   its config folder
+  decoder_patch: 16        #   pixels per latent token and side (16: 256 px from 16 x 16; 32: 512 px)
+  stats: null              #   the latent's normalisation statistics (stat.pt: mean, var)
+  dtype: fp32              #   fp32 | bf16: the encoder's and decoder's precision
+
+loss:
+  name: cbm                # cbm: sbm_t2i.loss.CBMLoss (everything below but guided_cbm) | guided_cbm: sbm_t2i.guided_cbm (the block below)
+  transport: {p: 1.0, c: 0.01, p_within: null, bins: 16, bin_ema: 0.99, weight: 1.0}   # per-example weight sg[(d^2 + c)^-p]; p = 0 is plain L2
+                                        # p_within: sg[(d^2 + c)^-p_w (m_t + c)^-(p - p_w)], m_t per logit-t bin (loss.py)
+  endpoint: {p: 0.0, c: 0.01, weight: 1.0, omega_skew: 1.0, late_weight: null}   # weight: endpoint gradient only; omega_skew > 1: omega' nearer 1
+                                        # late_weight {t0, power, cap}: rows at omega' > t0 weighted min{((1 - t0)/(1 - omega'))^power, cap} (loss.py)
+  anchor_alpha: 0.4                     # omega ~ U[1 - alpha, 1], omega' ~ U[omega, 1]
+  restrict_transport: false             # transport time t -> t * omega
+  time: {p_mean: -1.2, p_std: 1.0, eps: 1.0e-4, p_mean_end: null, anneal_start: 0, anneal_steps: 0,   # logit-normal
+         mix_frac: 0.0, mix_lo: 0.3}   # this fraction of the transport times uniform on [mix_lo, omega)
+  balance: {mode: match_smaller_to_larger, parameter_path: final_layer, ema: 0.99}   # mode pretrain only; none = unit weights; ema = smoothed ratio
+  signed: {alpha: 0.0, paired: false}   # CBM-T: alpha > 0 the signed rule; paired = its null control
+  cfg_distill: {enabled: false, strength: 0.25, t_max: 0.5, fixed_weight: null}   # CBM-E; fixed_weight: a fixed weight
+  gcond:                   # CBM-E conditioned on its strength w (needs model.gw_embedder)
+    enabled: false
+    form: force            # force: CBM-E's per-example force x w (w = 1 is the recipe) | anchored: iMF's guided target
+    w_min: 0.0             # 1 + w ~ (1 + w)^-beta on [1 + w_min, 1 + w_max] (iMF: beta 1 for B/2, 2 for M/L/XL)
+    w_max: 4.0
+    beta: 1.0
+    frechet_w: [0.0, 1.0, 2.0, 4.0]   # the Frechet batch of step s reads at frechet_w[s mod K], per-w moments
+  frechet:
+    enabled: false
+    strength: 1.0
+    n_samples: 8           # per rank
+    omega: 0.8
+    ema: 0.99
+    w_every: 10
+    fd_ref: null           # pass the parent's value when continuing a run that had the term on
+    start_step: 0
+    save_state: false      # true: the running moments and fd_ref ride in the checkpoint (resumes keep the anneal)
+    anneal: true           # false: no sqrt(FD / fd_ref) fade
+    global_norm: false     # true: weight from the norm of the rank-averaged Frechet gradient
+    fixed_weight: null     # a number: this weight on the unit loss's gradient instead of the endpoint-norm scaling
+    stats: ${store:}/refs/features/dino_vitb14_train_decoded_stats.pt
+    dino_hub: ${store:}/refs/torch_home/hub/facebookresearch_dinov2_main
+    vae: stabilityai/sd-vae-ft-mse
+  aux: {alpha: 0.0, align: 0.0, pool: []}   # projected BTM on the side readouts, + their alignment; pool per tap
+  guide: {enabled: false, w: 1.0, kappa: 0.0, t_lo: 0.35, t_hi: 0.6, negative: uncond, start_step: 0, endpoint: false, diag_frac: 0.0,
+          diag_time: null,   # {p_mean, p_std}: logit-normal time for the diagonal (denoiser) rows
+          omega_cond: false, w_min: 1.0, w_max: 8.0, beta: 1.0, t_cap: 1.0, teacher_decay: null, teacher_refresh: null, v_weight: 1.0,
+          teacher_from: null, teacher_weights: ema,   # an external frozen teacher's weights (e.g. a flow model; CFG scale 1 + kappa)
+          calib: {enabled: false, w_init: 3.0, w_lo: 1.0, w_hi: 6.0, eta: 2.0e-4, n_gen: 16, s_lo: 0.35, s_hi: 0.6,
+                  ema: 0.99, every: 10}}   # iMF-style guided tangent (loss.py); negative: uncond | rolled
+  label_dropout: 0.0
+  noise_scale: 1.0         # z ~ noise_scale N(0, I); MiniT2I's pixel interpolant uses 2
+  diag_every: 0            # every N steps: full-network kappa and cos of the weighted transport / endpoint gradients
+  # loss.name guided_cbm: the guided objective of the RAE-latent maps (sbm_t2i.guided_cbm) with the RAE line's defaults
+  # (configs/rae/train.yaml loss.guided_cbm); the text-to-image recipes set time_shift, balance freeze, transport.weight 1,
+  # guide.start_step and kappa (configs/t2i/exp/t2i_rae_xl1dh.yaml)
+  guided_cbm:
+    time_shift: 1.0        # nominal s -> interpolant time s / (s + alpha (1 - s)) (RAE's dimension shift)
+    time: {p_mean: -1.2, p_std: 1.0, eps: 1.0e-4, mix_frac: 0.5, mix_lo: 0.3}
+    anchor_alpha: 0.65
+    label_dropout: 0.1
+    transport: {p: 1.0, c: 0.01, weight: 2000.0}
+    endpoint:
+      p: 0.0
+      c: 0.01
+      weight: 1.0
+      late_weight: {t0: 0.6, power: 1.0, cap: 8.0}
+      late_weight_start_step: null   # null: from guide.start_step
+    balance: {mode: none, parameter_path: final_layer, ema: 0.999}   # freeze: balancer until the guide start, then frozen
+    guide:
+      enabled: true
+      kappa: 0.8
+      t_lo: 0.35
+      t_hi: 0.6
+      endpoint: true
+      diag_frac: 0.5
+      start_step: 2000
+      teacher_refresh: 10000
+      teacher_source: null             # null: the active EMA; a decay: that EMA copy
+      teacher_refresh_at_start: false
+      marginal_tangent: {enabled: false, t_lo: null, t_hi: 0.95}
+      autoguide: {enabled: false, ckpt: null, weight: 0.0, ema: null}   # a weaker checkpoint of the same map
+      scale_cond: {enabled: false, lo: 2.0, hi: 8.0, lr_mult: 1.0}       # needs model.guidance_enabled
+    repa: {enabled: false, weight: 0.5}
+    tangent_only_jvp: true
+
+optim:
+  name: muon               # muon (Muon on 2-D weights, AdamW on the rest at adam_lr) | adamw
+  lr: 1.0e-3
+  adam_lr: null            # null = lr / 10
+  betas: [0.9, 0.95]
+  weight_decay: 0.0
+  warmup_steps: 0
+  schedule: constant       # constant | cosine | staged
+  stage_step: 0
+  stage_factor: 1.0
+  decay_start_step: 0
+  decay_end_step: 0
+  min_factor: 0.0
+  clip: null               # global gradient-norm clip
+  force_on_resume: true    # reassert lr after resuming another run's optimizer state
+  batched: false           # muon: Newton-Schulz batched per weight shape (sbm_t2i.speed.BatchedMuon; same arithmetic)
+  freeze: []               # fnmatch patterns of parameter names (e.g. "refiner.*") whose gradients are dropped before the
+                           #   step: neither optimizer moves them or their state (the head-only training stage)
+  skip_spike: {factor: 0.0, ema: 0.99, warmup: 50}   # factor > 0 skips a step whose gradient norm exceeds factor x
+                           #   the running geometric mean (log-EMA) of the accepted steps' norms (also non-finite ones)
+  zero_key_bias: false     # zero the key bias of every attention without qk-norm (network, EMA copies, teacher)
+                           #   and hold it there; softmax is invariant to it, so the function is unchanged (sbm_t2i.train)
+
+train:
+  max_steps: 200000        # absolute global step (resume_state continues the parent's counter)
+  steps_after_init: null   # or: max_steps = the parent's step + this
+  global_batch: 256
+  per_device_batch: 64
+  devices: auto            # GPUs per node: auto = every visible GPU (under torchrun: its --nproc_per_node)
+  num_nodes: 1             # nodes (under torchrun: its --nnodes)
+  precision: bf16-mixed
+  tf32: true
+  per_rank_seed: true      # every rank its own noise stream (off: all ranks draw the same noise)
+  checkpoint_every: 2500
+  stage_checkpoints_locally: false   # a node-local folder (true: <tmp>/sbm-ckpt-<run>) checkpoints are written to first, then
+                                     #   copied into the run folder in the background
+  log_every: 25
+  val_every: 1000
+  val_batches: 8
+  ema: {decays: [0.99, 0.999, 0.9999], active: 0.999, min_step: 100, foreach: false}   # foreach: bit-identical, no host syncs
+  eval: {protocol: null, steps: []}      # in-training evaluation (mode finetune): e.g. xl_val50k at [1000, 2000, ...]
+  sync_free: false         # logged scalars made on the device; the logged grad norm by foreach
+  step_timer: 0            # every N steps: seconds per step to monitor/perf.jsonl and perf/* (0 = off)
+  compile:                 # loss.name guided_cbm: torch.compile of the step's network calls (sbm_t2i.speed; all false = eager)
+    teacher: false         #   the frozen teacher's (and the weak model's) no-grad reads
+    student_fwd: false     #   the student's endpoint forward
+    fwd_attention: fused   #   the student forward's attention, fused (SDPA) | plain (q k^T product)
+    student_jvp: false     #   the student's JVP
+    jvp_attn_fp32: false   #   attention in fp32 in the JVP's network only (model.attn_fp32: everywhere)
+    mode: default
+  monitor:                 # fixed-noise one-step Inception FID of EMA copies inside training (sbm_t2i.monitor; every 0 = off)
+    every: 0
+    n_per_rank: 2000       # pooled over ranks (FID-8k on 4 GPUs); rank 0 alone = the b2_adm50k stream's first n
+    decays: [0.999]
+    omega: 0.8
+    seed: 2066             # 42 + 2024, the b2_adm50k stream; rank r uses seed + 7919 r
+    batch: 250
+    vae_batch: 64
+    refs: [val]            # FID vs ImageNet-val; each ref adds one 2048-d eig per read
+    label_scales: [1.0]    # each read repeated with the class rows moved away from the null row by this factor
+    guidance_reads: []     # a map with a guidance input: extra reads at [w, s_lo, s_hi] (tag suffix _w<w>)
+    steps_per_epoch: null  # -> monitor/epoch
+    schedule: null         # {metric: ema0_999_fid50k_est_val, points: [[step, value], ...]} -> monitor/schedule, gap_to_schedule
+
+finetune:                  # mode finetune only
+  seed: 2026092001         # the per-pair draw stream and the bank rows
+  pairs: 16                # 32 images per update
+  micro_pairs: 16
+  omega_range: [0.6, 1.0]
+  endpoint_weight: balance0.25   # balanceK (lambda = K |g_t| / |g_e|) or a fixed number
+
+wandb: {project: sbm-t2i, entity: null, mode: online, tags: []}   # mode offline | disabled to keep it local

@@ -1,0 +1,26 @@
+# @package _global_
+# SBM-XL/2: the BTM base (exp/xl_guided.yaml) continued with self-guidance on the ADM-preprocessed SD-VAE latents for 355k
+# steps of batch 256 (the paper's XL map: FID-50k 3.56 read at omega 0.95, label scale 1.2, EMA 0.9999). On top of
+# xl_guided: kappa 0.7 (omega 3.33), half the transport times on the late path, the guide read from a frozen EMA copy
+# refreshed every 10k steps, late endpoint rows weighted min{0.4 / (1 - omega'), 8}, and the two terms at a fixed ratio
+# (transport x2000, endpoint x1) instead of the adaptive balancer.
+# The paper's map was trained as consecutive resumed segments in which this recipe was assembled over the first 45k steps
+# (kappa 2/3 then 0.8, the time mixture, then the frozen teacher, then the late weight and the fixed ratio; kappa 0.7 from
+# 205k), so a run of this file from the base is the final recipe from step 0, not a replay of those segments.
+# Measured: about 1.5k steps per hour on 8 H100.
+defaults:
+  - xl_guided
+exp_name: xl_sbm
+loss:
+  guide: {kappa: 0.7, teacher_decay: 1.0, teacher_refresh: 10000}   # kappa 0.7 (omega 3.33), frozen teacher
+  time: {mix_frac: 0.5, mix_lo: 0.3}                                # half the transport times uniform on [0.3, omega)
+  endpoint: {late_weight: {t0: 0.6, power: 1.0, cap: 8.0}, weight: 1}   # late endpoint rows weighted min{0.4 / (1 - omega'), 8}
+  transport: {weight: 2000}                                         # the fixed ratio: transport x2000 / endpoint x1 ...
+  balance: {mode: none}                                             # ... instead of the adaptive balancer
+train:
+  max_steps: 355000
+  per_device_batch: 32                    # batch 256 = 8 x 32 (gradient accumulation on fewer GPUs)
+  checkpoint_every: 5000
+  ema: {decays: [0.999, 0.9999, 1.0], active: 0.999, min_step: 100, foreach: true}   # 1.0 = the guide's frozen teacher
+  monitor: {every: 1000, n_per_rank: 2500, decays: [0.999], omega: 0.95, batch: 250, vae_batch: 50, refs: [adm],
+            label_scales: [1.0, 1.1, 1.2], steps_per_epoch: 5004.56}
