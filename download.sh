@@ -26,8 +26,9 @@ t2i() {
   "$PY" scripts/rae/fetch_assets.py              # RAE decoder (the text-to-image maps share the ImageNet latent)
   bash scripts/t2i/data/fetch.sh scripts/t2i/data/manifest_flan_t5.tsv
 }
+has_wm() { "$PY" -c "import decord, lpips" 2>/dev/null; }
 wm() {
-  "$PY" -c "import decord, lpips" 2>/dev/null || { echo "world models: run 'uv sync --extra wm' first" >&2; exit 1; }
+  has_wm || { echo "world models: run 'uv sync --extra wm' first" >&2; exit 1; }
   checkpoints wm                                 # + wm/examples/: four validation episodes for sample.py
   "$PY" scripts/rae/fetch_assets.py --wm         # SD3 VAE (gated), FID / LPIPS / FVD networks, stylegan-v's FVD code
 }
@@ -36,7 +37,8 @@ case "${1:-all}" in
   imagenet) imagenet ;;
   t2i) t2i ;;
   wm) wm ;;
-  all) imagenet; t2i; wm ;;
+  all) imagenet; t2i
+       if has_wm; then wm; else echo "world models skipped: run 'uv sync --extra wm', then 'bash download.sh wm'"; fi ;;
   *) echo "usage: bash download.sh [imagenet|t2i|wm|all]" >&2; exit 1 ;;
 esac
 echo "done: checkpoints in $SBM_STORE/ckpt/"
