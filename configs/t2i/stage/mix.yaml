@@ -1,0 +1,15 @@
+# @package _global_
+# Text-to-image stage 2: the 120k alignment mix (BLIP3o-60k, the DALL-E 3 dataset, ShareGPT-4o-Image; MiniT2I's
+# fine-tuning set, `bash download.sh t2i-data`, re-dealt into 256 equal shuffled shards) for 160,000 steps at batch 256,
+# whole model, the pre-training objective and optimiser unchanged. It continues the step counter, optimizer and loss state
+# of its starting checkpoint (init.resume_state), a checkpoint average made resumable by scripts/t2i/ckpt/soup_to_resume.py.
+# The released models' chain: configs/t2i/stage/README.md.
+#   python -m sbm_t2i.cli train t2i_rae_xl1dh +stage=mix init.from=<checkpoint> name=<name>
+init:
+  from: <required>
+  resume_state: true
+data:
+  shards: ${store:}/t2i/data/shards/mix120k_s256/*.tar
+  caption_dir: null
+train:
+  steps_after_init: 160000

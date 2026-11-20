@@ -14,8 +14,8 @@
 #               clipping at 1e5 (a guard only) and the plain-attention student forward
 #   speed       torch.compile of the teacher, student forward and JVP; batched Muon; foreach EMA
 # Data: CC12M with MiniT2I's LLaVA-NeXT recaptions (their pretraining set), images read at 256 px (shorter side, centre
-# crop; no flips: prompts name left and right). The later stages (the 120k alignment mix, then head-only training) are
-# overrides of this run's run.yaml (README).
+# crop; no flips: prompts name left and right). The later stages (the 120k alignment mix, then the DDT head alone) are
+# configs/t2i/stage/*.yaml (+stage=mix, +stage=headonly); the released models' chain: configs/t2i/stage/README.md.
 exp_name: t2i_rae_xl1dh
 model: {name: TextDiT-XL/1-DH, input_size: 16, in_channels: 384, txt_dim: 1024, txt_len: 256, text_depth: 2,
         pooled_cond: true, tangent_only_jvp: true, label_dim: 1000}

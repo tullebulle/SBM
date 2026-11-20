@@ -98,14 +98,15 @@ python scripts/rae/train.py +experiment=rae_record init_weights_from=store/ckpt/
 python scripts/sbm/encode_imagenet.py store/data/imagenet_1k/train store/data/imagenet_latents_packed_adm
 python -m sbm.cli train b2_sbm name=b2                          # SBM-B/2 from scratch, all visible GPUs
 python -m sbm.cli train xl_finetune name=xl_ft                  # fine-tune the released SBM-XL/2
-# Text-to-image, CC12M pre-training
+# Text-to-image: CC12M pre-training, then the alignment mix and the head alone (+stage=mix, +stage=headonly)
 python -m sbm_t2i.cli train t2i_rae_xl1dh                       # or t2i_rae_b1dh_t15; all visible GPUs
 # World models
 python scripts/rae/train.py +experiment=wm_bridge trainer.devices=2    # wm_rt1: trainer.devices=4
 ```
 
 The recipes and the cool-down schedules of the released models are in the headers of `configs/rae/experiment/*.yaml`,
-`configs/sbm/exp/*.yaml` and `configs/t2i/exp/*.yaml`. Fine-tuning any released checkpoint: `init_weights_from=<file>`
+`configs/sbm/exp/*.yaml` and `configs/t2i/exp/*.yaml`; the text-to-image models' stages and checkpoint averages, command by
+command, in `configs/t2i/stage/README.md`. Fine-tuning any released checkpoint: `init_weights_from=<file>`
 (RAE line and world models), `init.from=<file>` (SD-VAE line and text-to-image).
 
 ## Tests

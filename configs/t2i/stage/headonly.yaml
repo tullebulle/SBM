@@ -1,0 +1,20 @@
+# @package _global_
+# Text-to-image stage 3: the DDT head alone (the trunk, the embedders and the prompt path frozen: optim.freeze), on CC12M
+# and the alignment mix together (8 + 8 samples in every per-GPU batch of 16), Muon 2e-4 / AdamW 2e-5 (constant). It
+# continues the step counter, optimizer and loss state of its starting checkpoint (init.resume_state), a checkpoint
+# average made resumable by scripts/t2i/ckpt/soup_to_resume.py. The released models are a few thousand steps in
+# (train.steps_after_init: SBM-XL 35,000, SBM-B 5,000); the chain: configs/t2i/stage/README.md.
+#   python -m sbm_t2i.cli train t2i_rae_xl1dh +stage=headonly init.from=<checkpoint> name=<name> train.steps_after_init=35000
+init:
+  from: <required>
+  resume_state: true
+data:
+  mix:                     # replaces data.shards (data.mix=null: the experiment's CC12M alone)
+    - {shards: "${store:}/t2i/data/raw/cc12m/cc12m-train-*.tar", caption_dir: "${store:}/t2i/data/shards/cc12m_captions", per_batch: 8}
+    - {shards: "${store:}/t2i/data/shards/mix120k_s256/*.tar", caption_dir: null, per_batch: 8}
+optim:
+  lr: 2.0e-4
+  adam_lr: 2.0e-5
+  freeze: [mask_token, x_embedder.*, txt_embedder.*, refiner.*, pool_embedder.*, omega_embedder.*, blocks.*]
+train:
+  steps_after_init: 100000
