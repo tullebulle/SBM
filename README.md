@@ -68,14 +68,23 @@ python -m sbm.cli eval store/ckpt/imagenet/sbm_sdvae_xl_step355000_ema0_9999.pt
 # GenEval: samples, then the scorer (its environment: bash scripts/t2i/geneval/build_env.sh && bash scripts/t2i/geneval/build_mmcv.sh)
 python scripts/t2i/geneval_sample.py ckpt=store/ckpt/t2i/sbm_t2i_xl_step1200000_ema0_9999.pt out=geneval/xl seed=1
 bash scripts/t2i/geneval/score.sh geneval/xl geneval/xl_score
-# World models: every validation episode on all visible GPUs (needs the data below)
+# World models: every validation episode on all visible GPUs (needs the data: bash download.sh wm-data bridge)
 bash scripts/rae/wm/eval.sh store/ckpt/wm/sbm_wm_bridge_step660000_ema0_999.pt wm_eval/bridge
 ```
 
 ## Train
 
-Data goes in `store/` (or `$SBM_STORE`): ImageNet as `store/data/imagenet_1k/{train,val}/<wnid>/*.JPEG`; the other
-datasets are prepared by the scripts below.
+First the training data, into `store/` (or `$SBM_STORE`); every command resumes when re-run:
+
+```bash
+bash download.sh imagenet-data      # ImageNet-1k, 154 GB (accept the terms at huggingface.co/datasets/ILSVRC/imagenet-1k first)
+bash download.sh t2i-data           # CC12M with recaptions and the 120k alignment mix, ~1.5 TB
+bash download.sh wm-data bridge     # or rt1: download, convert, encode with the SD3 VAE (GPUs); ~300 GB, a few hours
+```
+
+Already have ImageNet as `train/` and `val/` class folders? Link it instead:
+`mkdir -p store/data && ln -s /path/to/imagenet store/data/imagenet_1k`.
+Then train:
 
 ```bash
 # ImageNet, RAE latent: fine-tune the released SBM-XL (images are encoded on the fly)
@@ -85,11 +94,9 @@ python scripts/rae/train.py +experiment=rae_record init_weights_from=store/ckpt/
 python scripts/sbm/encode_imagenet.py store/data/imagenet_1k/train store/data/imagenet_latents_packed_adm
 python -m sbm.cli train b2_sbm name=b2                          # SBM-B/2 from scratch, all visible GPUs
 python -m sbm.cli train xl_finetune name=xl_ft                  # fine-tune the released SBM-XL/2
-# Text-to-image: CC12M with recaptions and the 120k alignment mix (scripts/t2i/data), then
+# Text-to-image, CC12M pre-training
 python -m sbm_t2i.cli train t2i_rae_xl1dh                       # or t2i_rae_b1dh_t15; all visible GPUs
-# World models: data (download, conversion, SD3-VAE latents; ~300 GB per dataset), then training
-bash scripts/rae/wm/data/fetch_driftworld.sh && bash scripts/rae/wm/data/setup_convert_env.sh
-bash scripts/rae/wm/data/prepare.sh bridge                      # or rt1
+# World models
 python scripts/rae/train.py +experiment=wm_bridge trainer.devices=2    # wm_rt1: trainer.devices=4
 ```
 
