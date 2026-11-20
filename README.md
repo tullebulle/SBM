@@ -17,12 +17,16 @@ source .venv/bin/activate
 
 ## Checkpoints
 
-The checkpoints are on Hugging Face ([sbm-models/sbm](https://huggingface.co/sbm-models/sbm)); request access, then
-`hf auth login`. One command downloads them with the frozen networks they need:
+The checkpoints are on Hugging Face ([sbm-models/sbm](https://huggingface.co/sbm-models/sbm)). One command downloads them
+with the frozen networks they need:
 
 ```bash
 bash download.sh              # everything, or one of: imagenet | t2i | wm
 ```
+
+The world models need the SD3 VAE, a gated model: accept its terms at
+[stabilityai/stable-diffusion-3-medium-diffusers](https://huggingface.co/stabilityai/stable-diffusion-3-medium-diffusers),
+then `hf auth login`.
 
 | task | model | `--model` | result |
 |---|---|---|---|

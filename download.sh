@@ -12,9 +12,9 @@
 #   bash download.sh t2i-data          # CC12M + recaptions (1.2 TB) and the 120k alignment mix (0.25 TB), ready to train on
 #   bash download.sh wm-data bridge    # or rt1: download (~130 GB), convert, encode with the SD3 VAE (GPUs); a few hours
 #
-# Access, on huggingface.co (then `hf auth login`): the checkpoints are in a private repo (ask for access); ImageNet-1k
-# (datasets/ILSVRC/imagenet-1k) and the SD3 VAE of the world models (stabilityai/stable-diffusion-3-medium-diffusers) are
-# gated: accept their terms on those pages first.
+# The checkpoints are public. ImageNet-1k (huggingface.co/datasets/ILSVRC/imagenet-1k) and the SD3 VAE of the world models
+# (huggingface.co/stabilityai/stable-diffusion-3-medium-diffusers) are gated: accept their terms on those pages, then
+# `hf auth login`.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 PY=.venv/bin/python HF=.venv/bin/hf
